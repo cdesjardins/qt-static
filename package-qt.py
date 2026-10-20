@@ -11,7 +11,8 @@
 #
 #   ./package-qt.py ~/sw/qt6/Qt-2204 linux-x64-glibc2.35 \
 #       --config-opt ~/sw/qt6/qt6.8.3-build-2204/config.opt
-#   py package-qt.py C:\Qt\6 windows-x86-msvc-static --config-opt <build>\config.opt
+#   py package-qt.py C:\Qt\6 windows-x86-msvc-static --exclude "*.pdb" \
+#       --config-opt <build>\config.opt
 #
 # The archive holds the prefix's contents at its root (bin/, lib/, ...), so it
 # is extracted straight into whatever directory is to become the Qt prefix.
@@ -19,9 +20,13 @@
 # installed to; only qmake's .pri files and Qt6BuildInternals keep the original
 # prefix, and building ComBomb uses neither.
 #
+# --exclude drops files by name, such as the MSVC .pdb files, which are most of
+# a debug_and_release Windows install and are not needed to link against it.
+#
 # Standard library only, so it runs the same with the stock Python on Windows.
+# Where an xz binary is on PATH it does the compression, multithreaded.
 
-import argparse, hashlib, io, lzma, os, re, sys, tarfile, time
+import argparse, fnmatch, hashlib, io, os, re, shutil, subprocess, sys, tarfile, time
 
 def qtVersion(prefix):
     path = os.path.join(prefix, "lib", "cmake", "Qt6", "Qt6ConfigVersionImpl.cmake")
@@ -53,6 +58,8 @@ def main():
     parser.add_argument("prefix", help = "Qt install prefix (the configure -prefix)")
     parser.add_argument("platform", help = "platform tag for the file name, e.g. linux-x64-glibc2.35")
     parser.add_argument("--config-opt", help = "the Qt build directory's config.opt, stored in the archive")
+    parser.add_argument("--exclude", action = "append", default = [],
+                        help = "file name pattern to leave out, e.g. *.pdb (repeatable)")
     parser.add_argument("-o", "--outdir", default = ".", help = "where to write the archive")
     args = parser.parse_args()
 
@@ -68,16 +75,36 @@ def main():
     if (args.config_opt != None):
         with open(os.path.expanduser(args.config_opt)) as f:
             info += "\nconfigure options (config.opt):\n" + f.read()
+    if (len(args.exclude) > 0):
+        info += "\nexcluded: " + " ".join(args.exclude) + "\n"
+
+    def keep(tarinfo):
+        name = os.path.basename(tarinfo.name)
+        for pattern in args.exclude:
+            if (fnmatch.fnmatch(name, pattern)):
+                return None
+        return tarinfo
 
     print("Packing " + prefix + " -> " + out)
     sys.stdout.flush()
-    # preset 6 keeps the pack time sensible; the Linux prefix comes out around
-    # 125 MB either way. Entries are relative to the prefix, so it extracts
-    # in place.
-    with tarfile.open(out, "w:xz", preset = 6) as tar:
-        for entry in sorted(os.listdir(prefix)):
-            tar.add(os.path.join(prefix, entry), arcname = entry)
-        addText(tar, "QT_STATIC_INFO.txt", info)
+    # Entries are relative to the prefix, so it extracts in place. Preset 6
+    # either way; the stream from xz -T0 is still a plain .tar.xz.
+    xz = shutil.which("xz")
+    if (xz != None):
+        outFile = open(out, "wb")
+        proc = subprocess.Popen([xz, "-T0", "-6", "-c"], stdin = subprocess.PIPE, stdout = outFile)
+        tar = tarfile.open(fileobj = proc.stdin, mode = "w|")
+    else:
+        tar = tarfile.open(out, "w:xz", preset = 6)
+    for entry in sorted(os.listdir(prefix)):
+        tar.add(os.path.join(prefix, entry), arcname = entry, filter = keep)
+    addText(tar, "QT_STATIC_INFO.txt", info)
+    tar.close()
+    if (xz != None):
+        proc.stdin.close()
+        if (proc.wait() != 0):
+            sys.exit("Error: xz failed")
+        outFile.close()
 
     size = os.path.getsize(out)
     print("%s  %.1f MB" % (name, size / 1e6))

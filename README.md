@@ -18,7 +18,8 @@ workflow pins the tag, so changing Qt is a deliberate one-line change there.
 
 The Windows build is 32-bit to match Boost and Botan in the ComBomb build. Each
 archive holds the prefix contents at its root, plus a `QT_STATIC_INFO.txt` that
-records the configure options.
+records the configure options. The Windows archive leaves out the `.pdb` files,
+which are most of a debug_and_release install and are not needed to link.
 
 ## Adding a build
 
@@ -31,7 +32,7 @@ gh release create 6.8.3-1 --title "Qt 6.8.3" qt-6.8.3-linux-x64-glibc2.35.tar.xz
 On Windows, from the machine that built Qt:
 
 ```bat
-py package-qt.py C:\Qt\6 windows-x86-msvc-static --config-opt <qt build dir>\config.opt
+py package-qt.py C:\Qt\6 windows-x86-msvc-static --exclude "*.pdb" --config-opt <qt build dir>\config.opt
 gh release upload 6.8.3-1 qt-6.8.3-windows-x86-msvc-static.tar.xz
 ```
 
